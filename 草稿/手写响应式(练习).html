@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  <script>
+    const data = {
+      text: '1'
+    }
+    const bucket = new Set()
+    const obj = new Proxy(data, {
+      get(target, key) {
+        return target[key]
+      },
+      set(target, key, newVal) {
+        target[key] = newVal
+        document.body.innerHTML = obj.text
+      }
+    })
+    function effect() {
+      document.body.innerHTML = obj.text
+    }
+    effect()
+    setTimeout(() => {
+      obj.text = '2'
+    }, 1000)
+  </script>
+</body>
+</html>

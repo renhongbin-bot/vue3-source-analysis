@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <script>
+      // 存储副作用函数的桶
+      const bucket = new WeakMap();
+
+      // 原始数据
+      const data = { text: "hello word" };
+
+      const obj = new Proxy(data, {
+        // 拦截读取操作
+        get(target, key) {
+          // 将副作用effect 添加到存储副作用函数的桶中
+          track(target, key);
+          // 返回属性值
+          return target[key];
+        },
+        // 拦截设置的操作
+        set(target, key, newVal) {
+          // 设置属性值
+          target[key] = newVal;
+          // 把副作用从函数桶里取出并执行
+          trigger(target, key);
+          return true
+        },
+      });
+
+      // 在get拦截函数内调用track函数追踪变化
+      function track(target, key) {
+        // 没有activeEffect，直接return
+        if (!activeEffct) return;
+        // 根据target从桶bucket中取得depsMap， 他也是一个Map类型 key--->effects
+        let depsMap = bucket.get(target);
+        // 如果不存在depsMap,那么就创建一个Map与target关联
+        if (!depsMap) {
+          bucket.set(target, (depsMap = new Map()));
+        }
+        // 再根据key从depsMap中取得deps,他是一个Set类型，里面存储这所有当前key关联的副作用函数，effects
+        let deps = depsMap.get(key);
+        // 如果deps不存在，同样新建一个Set并与key关联
+        if (!deps) {
+          depsMap.set(key, (deps = new Set()));
+        }
+        // 最后将当前激活的副作用函数添加到桶里
+        deps.add(activeEffct);
+      }
+
+      // 在set拦截函数内调用trigger函数触发变化
+      function trigger(target, key) {
+        // 根据target从桶中取得depsMap，他是key--->effects
+        const depsMap = bucket.get(target);
+        if (!depsMap) return;
+        // // 根据key获取所有副作用函数effects
+        const effects = depsMap.get(key);
+        console.log(effects)
+        // // 执行副作用函数
+        effects && effects.forEach((fn) => fn());
+      }
+
+
+
+      // 用一个全局变量存储被注册的副作用函数
+      let activeEffct;
+      // effect用户注册副作用函数
+      function effect(fn) {
+        // 当调用effect注册副作用函数时，将副作用函数fn赋值给activeEffct
+        activeEffct = fn;
+        // 执行副作用函数
+        fn();
+      }
+      // 执行副作用函数，触发读取
+      effect(
+        // 一个匿名副作用函数
+        () => {
+          document.body.innerHTML = obj.text;
+        }
+      );
+      // 1秒后修改响应数据
+      setTimeout(() => {
+        obj.text = "hello proxy";
+      }, 1000);
+    </script>
+  </body>
+</html>
