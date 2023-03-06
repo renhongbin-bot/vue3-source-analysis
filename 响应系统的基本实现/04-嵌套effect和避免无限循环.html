@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <script>
+      const bucket = new WeakMap();
+
+      const data = { text: "hello word" };
+
+      const obj = new Proxy(data, {
+        get(target, key) {
+          // 将副作用effect 添加到存储副作用函数的桶中
+          track(target, key);
+          // 返回属性值
+          return target[key];
+        },
+        // 拦截设置的操作
+        set(target, key, newVal) {
+          // 设置属性值
+          target[key] = newVal;
+          // 把副作用从函数桶里取出并执行
+          trigger(target, key);
+          return true;
+        },
+      });
+
+      // 在get拦截函数内调用track函数追踪变化
+      function track(target, key) {
+        // 没有activeEffect，直接return
+        if (!activeEffct) return;
+        let depsMap = bucket.get(target);
+        if (!depsMap) {
+          bucket.set(target, (depsMap = new Map()));
+        }
+        let deps = depsMap.get(key);
+        if (!deps) {
+          depsMap.set(key, (deps = new Set()));
+        }
+        // 最后将当前激活的副作用函数添加到依赖集合deps里
+        deps.add(activeEffct);
+        // deps就是一个与当前副作用函数存在联系的依赖集合
+        // 将其添加到activeEffect.deps数组中
+        activeEffct.deps.push(deps)
+      }
+
+      // 在set拦截函数内调用trigger函数触发变化
+      function trigger(target, key) {
+        // 根据target从桶中取得depsMap，他是key--->effects
+        const depsMap = bucket.get(target);
+        if (!depsMap) return;
+        // 根据key获取所有副作用函数effects
+        const effects = depsMap.get(key);
+        // 执行副作用函数
+        const effectsToRun = new Set()
+        effects && effects.forEach(effectFn => {
+          // 如果trigger触发的副作用函数与当前正在执行的副作用函数相同，则不触发执行
+          if(effectFn !== activeEffct) {
+            effectsToRun.add()
+          }
+        })
+        effectsToRun.forEach(effectFn => effectFn())
+      }
+
+      // 该函数接收副作用函数作为参数，遍历函数的effect.deps数组，然后将该副作用函数从依赖合集中移除，最后重置effectFn.deps数组
+      function cleanup(effectFn) {
+        // 遍历effectFn.deps数组
+        for(let i = 0; i < effectFn.deps.length; i++) {
+          // deps是依赖合集
+          const deps = effectFn.deps[i]
+          // 将effectFn从依赖合集中移除
+          deps.delete(effectFn)
+        }
+        // 最后需要重置effectFn.deps数组
+        effectFn.deps.length = 0
+      }
+
+
+      // 用一个全局变量存储当前激活的effect
+      let activeEffct;
+      // effect 栈
+      const effectStack = []
+      // effect用户注册副作用函数
+      function effect(fn) {
+        const effectFn = () => {
+          // 调用cleanup函数完成清除工作
+          cleanup(effectFn)
+          // 当effectFn执行时，将其设置为当前激活的副作用函数
+          activeEffct = effectFn;
+          // 在调用副作用函数之前将当前副作用函数压入栈中
+          effectStack.push(effectFn)
+          fn();
+          // 在当前副作用函数执行完毕后，将当前副作用函数弹出栈，并把activeEffect还原为之前的值
+          effectStack.pop()
+          activeEffct = effectStack[effectStack.length - 1]
+        };
+        // activeEffect.deps 用来存储所有与该副作用函数相关关联的依赖集合
+        effectFn.deps = []
+        // 执行副作用函数
+        effectFn()
+      }
+      // 执行副作用函数，触发读取
+      effect(
+        // 一个匿名副作用函数
+        () => {
+          document.body.innerHTML = obj.text;
+        }
+      );
+      // 1秒后修改响应数据
+      setTimeout(() => {
+        obj.text = "hello proxy";
+      }, 1000);
+    </script>
+  </body>
+</html>

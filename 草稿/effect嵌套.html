@@ -9,7 +9,8 @@
 <body>
   <script>
     const data = {
-      text: '1'
+      foo: true,
+      bar: true
     }
     const obj = new Proxy(data, {
       get(target, key) {
@@ -17,15 +18,24 @@
       },
       set(target, key, newVal) {
         target[key] = newVal
-        document.body.innerHTML = obj.text
+        // document.body.innerHTML = obj.foo
       }
     })
+    let temp1, temp2
     function effect() {
-      document.body.innerHTML = obj.text
+      document.body.innerHTML = obj.foo
     }
-    effect()
+    effect(function effectFn() {
+      console.log('effect1执行')
+      effect(function effectFn2() {
+        console.log('effectFn2执行')
+        temp2 = obj.bar
+      })
+      // 在effectFn1中读取obj.foo
+      temp1 = obj.foo
+    })
     setTimeout(() => {
-      obj.text = '2'
+      obj.text = false
     }, 1000)
   </script>
 </body>
