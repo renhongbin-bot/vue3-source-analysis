@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+
+  <body>
+    <script>
+      const bucket = new WeakMap();
+
+      const data = { foo: 1, bar: 2 };
+
+      const obj = new Proxy(data, {
+        get(target, key) {
+          // 将副作用effect 添加到存储副作用函数的桶中
+          track(target, key);
+          // 返回属性值
+          return target[key];
+        },
+        // 拦截设置的操作
+        set(target, key, newVal) {
+          // 设置属性值
+          target[key] = newVal;
+          // 把副作用从函数桶里取出并执行
+          trigger(target, key);
+          return true;
+        },
+      });
+
+      // 在get拦截函数内调用track函数追踪变化
+      function track(target, key) {
+        // 没有activeEffect，直接return
+        if (!activeEffct) return;
+        let depsMap = bucket.get(target);
+        if (!depsMap) {
+          bucket.set(target, (depsMap = new Map()));
+        }
+        let deps = depsMap.get(key);
+        if (!deps) {
+          depsMap.set(key, (deps = new Set()));
+        }
+        // 最后将当前激活的副作用函数添加到依赖集合deps里
+        deps.add(activeEffct);
+        // deps就是一个与当前副作用函数存在联系的依赖集合
+        // 将其添加到activeEffect.deps数组中
+        activeEffct.deps.push(deps);
+      }
+
+      // 在set拦截函数内调用trigger函数触发变化
+      function trigger(target, key) {
+        // 根据target从桶中取得depsMap，他是key--->effects
+        const depsMap = bucket.get(target);
+        if (!depsMap) return;
+        // 根据key获取所有副作用函数effects
+        const effects = depsMap.get(key);
+        // 执行副作用函数
+        const effectsToRun = new Set();
+        effects &&
+          effects.forEach((effectFn) => {
+            // 如果trigger触发的副作用函数与当前正在执行的副作用函数相同，则不触发执行
+            if (effectFn !== activeEffct) {
+              effectsToRun.add(effectFn);
+            }
+          });
+        effectsToRun.forEach((effectFn) => {
+          // 如果一个副作用函数存在调度器,则调用该调度器,并将副作用函数作为参数传递
+          if (effectFn.options.scheduler) {
+            effectFn.options.scheduler(effectFn);
+          } else {
+            effectFn();
+          }
+        });
+      }
+
+      // 该函数接收副作用函数作为参数，遍历函数的effect.deps数组，然后将该副作用函数从依赖合集中移除，最后重置effectFn.deps数组
+      function cleanup(effectFn) {
+        // 遍历effectFn.deps数组
+        for (let i = 0; i < effectFn.deps.length; i++) {
+          // deps是依赖合集
+          const deps = effectFn.deps[i];
+          // 将effectFn从依赖合集中移除
+          deps.delete(effectFn);
+        }
+        // 最后需要重置effectFn.deps数组
+        effectFn.deps.length = 0;
+      }
+
+      // 用一个全局变量存储当前激活的effect
+      let activeEffct;
+      // effect 栈
+      const effectStack = [];
+      // effect用户注册副作用函数
+      function effect(fn, options = {}) {
+        const effectFn = () => {
+          // 调用cleanup函数完成清除工作
+          cleanup(effectFn);
+          // 当effectFn执行时，将其设置为当前激活的副作用函数
+          activeEffct = effectFn;
+          // 在调用副作用函数之前将当前副作用函数压入栈中
+          effectStack.push(effectFn);
+          //将fn的执行结果存储到res中
+          const res = fn();
+          // 在当前副作用函数执行完毕后，将当前副作用函数弹出栈，并把activeEffect还原为之前的值
+          effectStack.pop();
+          activeEffct = effectStack[effectStack.length - 1];
+          //将res作为effectFn的返回值
+          return res;
+        };
+        // 将options挂载到effectFn上
+        effectFn.options = options;
+        // activeEffect.deps 用来存储所有与该副作用函数相关关联的依赖集合
+        effectFn.deps = [];
+        // 只有非lazy的时候才执行
+        if (!options.lazy) {
+          // 执行副作用函数
+          effectFn();
+        }
+        //将副作用函数作为返回值返回
+        return effectFn;
+      }
+
+      // 定义一个任务队列
+      const jobQueue = new Set();
+      // 使用Promise.resolve()创建一个promise实例,我们用它讲一个任务添加到微任务队列中
+      const p = Promise.resolve();
+      //是否正在刷新队列
+      let isFlushing = false;
+      function flushJob() {
+        //如果正在刷新队列,则什么都不做
+        if (isFlushing) return;
+        //设置为true,代表正在刷新
+        isFlushing = true;
+        //在微队列中刷新jobQueue队列
+        p.then(() => {
+          jobQueue.forEach((job) => job());
+        }).finally(() => {
+          //结束后重置isFlushing
+          isFlushing = false;
+        });
+      }
+
+      //实现计算属性
+      function computed(getter) {
+        // value用来缓存上次计算的值
+        let value;
+        //dirty标志用来表示是否需要重新计算值,为true则意味着"脏",需要计算
+        let dirty = true;
+        const effectFn = effect(getter, {
+          lazy: true,
+          // 添加调度器,在调度器中奖dirty重置为true
+          scheduler() {
+            if (!dirty) {
+              dirty = true;
+              // 当计算属性依赖的响应式数据发生变化时, 手动调用trigger函数触发响应式
+              trigger(obj, "value");
+            }
+          },
+        });
+        const obj = {
+          //当读取value时才执行effectFn
+          get value() {
+            if (dirty) {
+              value = effectFn();
+              dirty = false;
+            }
+            // 当读取value时, 手动调用track函数进行跟踪
+            track(obj, "value");
+            return value;
+          },
+        };
+        return obj;
+      }
+
+      //实现watch
+      function watch(source, cb, options = {}) {
+        //定义getter函数
+        let getter;
+        // 如果soure是函数,说明用户传递的是一个getter,所以直接把soure赋值给getter
+        if (typeof source === "function") {
+          getter = source;
+          //否则按照原来的实现调用traverse递归读取
+        } else {
+          getter = () => traverse(source);
+        }
+        // 定义旧值和新值
+        let oldValue, newValue;
+        // cleaup用来存储用户注册的过期回调
+        let cleanup
+        //定义onInvalidate函数
+        function onInvalidate(fn) {
+          //将过期函数存储袋cleanup中
+          cleanup = fn
+        }
+        //提取scheduler调度函数为一个独立的job函数
+        const job = () => {
+          // 在scheduler中重新执行副作用函数,得到的是新值
+          newValue = effectFn();
+          //在回调函数cb之前,先调用过期回调
+          if(cleanup) {
+            cleanup()
+          }
+          //旧值和新值作为回调函数的参数
+          //将onInvalidate作为回调函数的第三个参数,以便用户使用
+          cb(newValue, oldValue, onInvalidate);
+          //更新旧值,不然下一次会得到错误的旧值
+          oldValue = newValue;
+        };
+        //使用effect注册副作用函数时,开启lazy选项,并把返回值存储到effectFn中以便后续手动调用
+        let effectFn = effect(
+          //调用traverse 递归的读取
+          () => getter(),
+          {
+            lazy: true,
+            scheduler: () => {
+              //在调度函数中判断flush是否为post,如果是,将其放到微任务队列中执行
+              if(options.flush === 'post') {
+                const p = Promise.resolve()
+                p.then(job)
+              } else {
+                job()
+              }
+            },
+          }
+        );
+        if (options.immediate) {
+          //当immediate为true时立即执行job,从而触发回调执行
+          job();
+        } else {
+          //手动调用副作用函数,拿到的就是旧值
+          oldValue = effectFn();
+        }
+      }
+      function traverse(value, seen = new Set()) {
+        // 如果要读取的数据时原始值,或者已经被被读取过了,那么什么都不做
+        if (typeof value !== "object" || value === null || seen.has(value))
+          return;
+        //将数据添加到seen中,代表遍历的读取过了,避免循环引用引起的死循环
+        seen.add(value);
+        //暂时不考虑数组等其他结构
+        //假设value就是一个对象,使用for...in读取对象的每一个值,并递归的调用traverse进行处理
+        for (const k in value) {
+          traverse(value[k], seen);
+        }
+        return value;
+      }
+      watch(
+        obj,
+        async (newVal, oldVal, onInvalidate) => {
+          //定义一个标志,代表当前副作用函数是否过期,默认为false,代表没有过期
+          let expired = false
+          //调用onInvalidate()函数注册一个过期函数
+          onInvalidate(() => {
+            // 当过期时,将expired设置为true
+            expired = true
+          })
+          let res
+          //发送网络请求
+          setTimeout(() => {
+            res = {a:0}
+          }, 500)
+          //只有当该副作用函数的执行没有过期时,才会执行后续操作
+          if(!expired) {
+            finalData = res
+          }
+        }
+      );
+      obj.foo++;
+      console.log(obj.foo)
+      setTimeout(() => {
+        obj.foo++
+        console.log(obj.foo)
+      }, 200)
+    </script>
+  </body>
+</html>
